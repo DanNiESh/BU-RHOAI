@@ -1,5 +1,5 @@
 apiVersion: user.openshift.io/v1
 kind: Group
 metadata:
-  name: cs506
+  name: ds210
 users: []
