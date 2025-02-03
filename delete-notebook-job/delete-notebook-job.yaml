@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: delete-notebook-job
+  labels:
+    component.opendatahub.io/name: delete-notebook-job
+    opendatahub.io/component: 'true'
+    opendatahub.io/modified: 'false'
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        component.opendatahub.io/name: delete-notebook-job
+        opendatahub.io/component: 'true'
+        parent: delete-notebook-job
+    spec:
+      restartPolicy: Never
+      serviceAccountName: delete-notebook-job
+      schedulerName: default-scheduler
+      terminationGracePeriodSeconds: 30
+      securityContext: {}
+      containers:
+        - name: oc-cli
+          image: >-
+            registry.redhat.io/openshift4/ose-cli@sha256:25fef269ac6e7491cb8340119a9b473acbeb53bc6970ad029fdaae59c3d0ca61
+          command: ["/bin/bash", "-c", "--"]
+          args:
+          - |
+              notebooks=$(oc get notebooks -n rhods-notebooks -o jsonpath="{range .items[*]}{.metadata.name}{' '}{.metadata.namespace}{' '}{.metadata.annotations['opendatahub\.io/username']}{' '}{'\n'}{end}")
+              if [ -z "$notebooks" ]; then
+                  echo "No running notebooks found"
+                  exit 0
+              fi
+              group_members_1=$(oc get group $GROUP_NAME_1 -o=jsonpath='{.users[*]}')
+              group_members_2=$(oc get group $GROUP_NAME_2 -o=jsonpath='{.users[*]}')
+
+              # Loop through each notebook
+              while read -r nb ns user; do
+                  user_in_group1=false
+                  user_in_group2=false
+                  pvc="jupyterhub-nb-${nb#"jupyter-nb-"}-pvc"
+
+                  # Check if user belongs to group 1
+                  if echo "$group_members_1" | grep -qw "$user"; then
+                      echo "$user is in the $GROUP_NAME_1 group."
+                      user_in_group1=true
+                  fi
+
+                  # Check if user belongs to group 2
+                  if echo "$group_members_2" | grep -qw "$user"; then
+                      echo "$user is in the $GROUP_NAME_2 group."
+                      user_in_group2=true
+                  fi
+
+                  # Delete the notebook and PVC if the user is NOT in either group
+                  if [ "$user_in_group1" = false ] && [ "$user_in_group2" = false ]; then
+                      echo "User $user does not belong to $GROUP_NAME_1 or $GROUP_NAME_2, deleting the notebook"
+                      oc delete notebook $nb -n $ns
+                      oc delete pvc $pvc -n $ns
+                  fi
+              done <<< "$notebooks"
+          env:
+          - name: GROUP_NAME_1
+            value: "cs210"
+          - name: GROUP_NAME_2
+            value: "ds210"
+          resources:
+            limits:
+              cpu: 100m
+              memory: 800Mi
+            requests:
+              cpu: 100m
+              memory: 400Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: IfNotPresent
+      dnsPolicy: ClusterFirst
